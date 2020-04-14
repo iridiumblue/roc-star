@@ -274,6 +274,10 @@ Here's the helicopter view showing how to use the two functions as we loop on ep
         epoch_gamma = epoch_update_gamma(last_epoch_y_t, last_epoch_y_pred, epoch)
         #...
 
-Complete working code.
+A complete working example can be found here, [example.py](https://github.com/iridiumblue/roc-star/blob/master/example.py) 
 
-Sample runs.
+Below we chart the performance of roc-star against the same model using BCE.    Experience shows that roc-star can often simply be swapped into any model using BCE with a good chance at a performance increase.
+
+<img style="max-height:450px; max-width:750px; "  src='https://raw.githubusercontent.com/iridiumblue/about/master/newplot.png' />
+
+
