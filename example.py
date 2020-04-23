@@ -1,29 +1,30 @@
-# Note - this sample codes need cleaning up, and automatic loading of its test dataset.
+# See this github repo - https://github.com/iridiumblue/roc-star
 
-import numpy as np # linear algebra
-import pandas as pd # data processing, CSV file I/O (e.g. pd.read_csv)
-import traceback
-import sys
 
 epoches = 100
 INITIAL_LR=0.001
+
+BATCH_SIZE=600
+USE_ROC_STAR=True
+USE_TRAINS=True
+KAGGLE=False
+
+if USE_TRAINS:
+    from trains import Task
+    task = Task.init(project_name='roc_star', task_name='version 1')
+    logger = Task.current_task().get_logger()
+
 
 import os
 
 import warnings
 warnings.simplefilter(action='ignore', category=FutureWarning)
 
-KAGGLE=False
-if KAGGLE :
-    ipath = '../input/imagetest/'
-    img_files = os.listdir(ipath)
-    def train_path(p): return f"../input/imagetest/{p}"
-else:
-    ipath = 'images/'
-    img_files = os.listdir(ipath)
-    def train_path(p): return f"images/{p}"
-
-img_files = list(map(train_path, img_files))
+import numpy as np # linear algebra
+import pandas as pd # data processing, CSV file I/O (e.g. pd.read_csv)
+import traceback
+import sys
+import gc
 
 from PIL import Image
 import matplotlib.pyplot as plt
@@ -35,16 +36,25 @@ import torch.nn as nn
 import torch.nn.functional as F
 from torchvision import datasets, transforms
 from sklearn.metrics import mean_squared_error, roc_auc_score, accuracy_score
-from keras.utils import Progbar
-
+if not KAGGLE :
+    from keras.utils import Progbar
+    print(" -- Not really using Tensorflow backend, just their Progbar.  We're in PyTorch country.")
 
 import time
 import code
 
-# Any results you write to the current directory are saved as output.
 
-BATCH_SIZE=400
-USE_ROC_STAR=True
+if not KAGGLE:
+    ipath = 'images/'
+    img_files = os.listdir(ipath)
+    def train_path(p): return f"images/{p}"
+else:
+    ipath = '../input/images/'
+    img_files = os.listdir(ipath)
+    def train_path(p): return f"../input/images/{p}"
+    
+
+img_files = list(map(train_path, img_files))
 
 def epoch_update_gamma(y_true,y_pred, epoch=-1):
         """
@@ -87,7 +97,6 @@ def epoch_update_gamma(y_true,y_pred, epoch=-1):
         if epoch > -1 :
             return gamma
         return 0.10
-
 
 def roc_star_loss( _y_true, y_pred, gamma, _epoch_true, epoch_pred):
         """
@@ -161,7 +170,6 @@ def roc_star_loss( _y_true, y_pred, gamma, _epoch_true, epoch_pred):
 
         return res2
 
-
 class CatDogDataset(Dataset):
     def __init__(self, image_paths, transform):
         super().__init__()
@@ -183,6 +191,7 @@ transform = transforms.Compose([
     transforms.ToTensor(),
     transforms.Normalize((0.5,), (0.5,))
 ])
+
 import random
 random.shuffle(img_files)
 train_files = img_files[:20000]
@@ -239,28 +248,20 @@ class CatAndDogNet(nn.Module):
         return X
 
 model = CatAndDogNet().cuda()
-losses = []
-
 
 start = time.time()
-loss_fn = nn.CrossEntropyLoss()
-
-
-
-lr_range_4_momentum = [INITIAL_LR,INITIAL_LR/40.0]
 
 optimizer = torch.optim.AdamW(model.parameters(), lr = INITIAL_LR,weight_decay=1e-4)
 
-
-
-
 last_epoch_y_pred = torch.tensor( 1.0-numpy.random.rand(len(train_ds))/2.0, dtype=torch.float).cuda()
-#code.interact(local=dict(globals(), **locals()))
 last_epoch_y_t    = torch.tensor([o for o in train_tt],dtype=torch.float).cuda()
+
 epoch_gamma=0.20
 print("\rTraining ....\r")
+
 for epoch in range(epoches):
-    progbar = Progbar(num_batches, stateful_metrics=["loss","accuracy","LR","momentum"])
+    if not KAGGLE :
+       progbar = Progbar(num_batches, stateful_metrics=["loss","accuracy","LR","momentum"])
 
     epoch_loss = 0
     epoch_accuracy = 0
@@ -275,21 +276,15 @@ for epoch in range(epoches):
         preds = model(X)
         b_preds = preds.tolist()
 
-
-
-        if USE_ROC_STAR and epoch>-1 :
-          #code.interact(local=dict(globals(), **locals()))
+        if USE_ROC_STAR and epoch>0 :
           loss = roc_star_loss(y,preds,epoch_gamma, last_epoch_y_t, last_epoch_y_pred)
         else:
-          #code.interact(local=dict(globals(), **locals()))
-          loss = F.binary_cross_entropy(F.sigmoid(preds), 1.0*y)
+           loss = F.binary_cross_entropy(torch.sigmoid(preds), 1.0*y)
 
         optimizer.zero_grad()
         loss.backward()
         optimizer.step()
         batch_loss = loss.item()
-
-        c_lr,c_mom= 0,0 #scheduler.batch(batch_loss,i, num_batches)
 
         epoch_y_pred.extend(b_preds)
         epoch_y_t.extend(b_t)
@@ -304,8 +299,6 @@ for epoch in range(epoches):
               values=[
                 ("loss", batch_loss),
                 ("accuracy",accuracy),
-                ("LR", c_lr),
-                ("momentum ", c_mom),
               ]
             )
         #print('.', end='', flush=True)
@@ -313,10 +306,7 @@ for epoch in range(epoches):
       except:
           traceback.print_exc(file=sys.stdout)
           code.interact(local=dict(globals(), **locals()))
-
-
-    #c_epoch_lr=scheduler.epoch()
-    #print("\r*SideWinder recentered learning rate to ",c_epoch_lr)
+   
     last_epoch_y_pred = torch.tensor(epoch_y_pred).cuda()
     last_epoch_y_t = torch.tensor(epoch_y_t).cuda()
     auc = roc_auc_score(epoch_y_t,epoch_y_pred)
@@ -325,28 +315,26 @@ for epoch in range(epoches):
     epoch_gamma = epoch_update_gamma(last_epoch_y_t, last_epoch_y_pred, epoch)
 
     epoch_loss = epoch_loss / len(train_dl)
-    losses.append(epoch_loss)
+    print("Gamma ", epoch_gamma)
     print("TRAIN Epoch: {}, auc {:.4f}, train loss: {:.4f}, train accuracy: {:.4f}, time: {}".format(epoch, auc, epoch_loss, epoch_accuracy, time.time() - start))
     epoch_y_pred=[]
     epoch_y_t=[]
     with torch.no_grad():
-        val_epoch_loss = 0
-        val_epoch_accuracy = 0
         for val_X, val_y in valid_dl:
             val_X = val_X.cuda()
-            b_t = val_y
-            val_y = val_y.cuda()
             val_preds = model(val_X)
-            b_preds = val_preds.tolist()
-            val_loss = 0 #loss_fn(val_preds, val_y)
-            epoch_y_pred.extend(b_preds)
-            epoch_y_t.extend(b_t)
-            val_epoch_loss += val_loss
-            val_accuracy = 0 #((val_preds.argmax(dim=1) == val_y).float().mean())
-            val_epoch_accuracy += val_accuracy
+            epoch_y_pred.extend(val_preds.tolist())
+            epoch_y_t.extend(val_y.tolist())
+           
+            
 
         auc = roc_auc_score(epoch_y_t,epoch_y_pred)
         epoch_accuracy = accuracy_score(1*(np.array(epoch_y_pred)>=np.median(epoch_y_pred)), epoch_y_t)
         #val_epoch_accuracy = val_epoch_accuracy/len(valid_dl)
-        val_epoch_loss = val_epoch_loss / len(valid_dl)
-        print("VALID Epoch: {}, auc {:.4f},valid loss: {:.4f}, valid accuracy: {:.4f}, time: {}\n".format(epoch, auc, val_epoch_loss, epoch_accuracy, time.time() - start))
+        
+        print("VALID Epoch: {}, auc {:.4f}, valid accuracy: {:.4f}, time: {}\n".format(epoch, auc, 
+ epoch_accuracy, time.time() - start))
+        if USE_TRAINS :
+          logger.report_scalar("epoch","AUC",  iteration=epoch, value=auc)
+    gc.collect(2)
+    torch.cuda.empty_cache()
