@@ -9,15 +9,19 @@ epoches = 100
 INITIAL_LR=0.001
 
 import os
+
+import warnings
+warnings.simplefilter(action='ignore', category=FutureWarning)
+
 KAGGLE=False
 if KAGGLE :
     ipath = '../input/imagetest/'
     img_files = os.listdir(ipath)
     def train_path(p): return f"../input/imagetest/{p}"
 else:
-    ipath = '../input/imagetest/train'
+    ipath = 'images/'
     img_files = os.listdir(ipath)
-    def train_path(p): return f"../input/imagetest/train/{p}"
+    def train_path(p): return f"images/{p}"
 
 img_files = list(map(train_path, img_files))
 
@@ -33,21 +37,23 @@ from torchvision import datasets, transforms
 from sklearn.metrics import mean_squared_error, roc_auc_score, accuracy_score
 from keras.utils import Progbar
 
+
 import time
 import code
+
 # Any results you write to the current directory are saved as output.
 
-BATCH_SIZE=80
+BATCH_SIZE=400
 USE_ROC_STAR=True
 
 def epoch_update_gamma(y_true,y_pred, epoch=-1):
-"""
-    Calculate gamma from last epoch's targets and predictions.
-    Gamma is updated at the end of each epoch.
+        """
+        Calculate gamma from last epoch's targets and predictions.
+        Gamma is updated at the end of each epoch.
 
-    y_true: `Tensor`. Targets (labels).  Float either 0.0 or 1.0 .
-    y_pred: `Tensor` . Predictions.
-"""
+        y_true: `Tensor`. Targets (labels).  Float either 0.0 or 1.0 .
+        y_pred: `Tensor` . Predictions.
+        """
         DELTA = 2
         SUB_SAMPLE_SIZE = 10000.0
         pos = y_pred[y_true==1]
@@ -84,18 +90,18 @@ def epoch_update_gamma(y_true,y_pred, epoch=-1):
 
 
 def roc_star_loss( _y_true, y_pred, gamma, _epoch_true, epoch_pred):
-"""
-   Nearly direct loss function for AUC.
-   See article,
-   C. Reiss, "Roc-star : An objective function for ROC-AUC that actually works."
-   https://github.com/iridiumblue/articles/blob/master/roc_star.md
+        """
+        Nearly direct loss function for AUC.
+        See article,
+        C. Reiss, "Roc-star : An objective function for ROC-AUC that actually works."
+        https://github.com/iridiumblue/articles/blob/master/roc_star.md
 
-    _y_true: `Tensor`. Targets (labels).  Float either 0.0 or 1.0 .
-     y_pred: `Tensor` . Predictions.
-    gamma  : `Float` Gamma, as derived from last epoch.
-    _epoch_true: `Tensor`.  Targets (labels) from last epoch.
-    epoch_pred : `Tensor`.  Predicions from last epoch.
-"""
+            _y_true: `Tensor`. Targets (labels).  Float either 0.0 or 1.0 .
+            y_pred: `Tensor` . Predictions.
+            gamma  : `Float` Gamma, as derived from last epoch.
+            _epoch_true: `Tensor`.  Targets (labels) from last epoch.
+            epoch_pred : `Tensor`.  Predicions from last epoch.
+        """
         #convert labels to boolean
         y_true = (_y_true>=0.50)
         epoch_true = (_epoch_true>=0.50)
