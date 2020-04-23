@@ -74,7 +74,7 @@ OK, let's turn to the original paper : [**Optimizing Classifier Performance via 
 
 The authors, *Yan et. al* , motivate the discussion by writing the AUC score in a particular form.    Recall our example where we calculate AUC by doing a brute-force count over the set of possible black/white pairs to find the portion that are right-ordered.     Let **B** be the set of black values and **W** the set of white values.  All possible pairs are given by the Cartesian Product **B** X **W**.  To count the right-ordered pairs we write :
 
-<img style="margin-left:50px; max-height:100px; max-width:250px "  src='https://raw.githubusercontent.com/iridiumblue/about/master/pretty.png'/>
+<img style="margin-left:50px; max-height:100px; max-width:200px "  src='https://raw.githubusercontent.com/iridiumblue/about/master/pretty.png'/>
 
 
 
@@ -84,7 +84,7 @@ To make a loss function from this, we could just flip the x < y comparison to x 
 
 *Yan et. al* surveys - and then rejects - past work-arounds using continuous approximations to the step (Heaviside) function, such as a Sigmoid curve.   Then they pull this out of a hat :
 
-<img style="max-height:250px; max-width:750px; "  src='https://raw.githubusercontent.com/iridiumblue/about/master/xpr.png' />
+<img style="max-height:250px; max-width:800px; "  src='https://raw.githubusercontent.com/iridiumblue/about/master/xpr.png' />
 
 Yann got this forumula by applying a series of changes to the WMW:
 
