@@ -84,7 +84,7 @@ To make a loss function from this, we could just flip the x < y comparison to x 
 
 *Yan et. al* surveys - and then rejects - past work-arounds using continuous approximations to the step (Heaviside) function, such as a Sigmoid curve.   Then they pull this out of a hat :
 
-<img style="max-height:250px; max-width:750px; "  src='https://raw.githubusercontent.com/iridiumblue/about/master/roc.png' />
+<img style="max-height:250px; max-width:750px; "  src='https://raw.githubusercontent.com/iridiumblue/about/master/xpr.png' />
 
 Yann got this forumula by applying a series of changes to the WMW:
 
