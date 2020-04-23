@@ -276,6 +276,7 @@ Here's the helicopter view showing how to use the two functions as we loop on ep
         #...
 
 A complete working example can be found here, [example.py](https://github.com/iridiumblue/roc-star/blob/master/example.py) 
+For a faster jump-star you can fork this kernel on Kaggle : https://www.kaggle.com/iridiumblue/roc-star
 
 Below we chart the performance of roc-star against the same model using BCE.    Experience shows that roc-star can often simply be swapped into any model using BCE with a good chance at a performance increase.
 
