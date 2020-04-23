@@ -88,13 +88,14 @@ To make a loss function from this, we could just flip the x < y comparison to x 
 
 Yann got this forumula by applying a series of changes to the WMW:
 
- 1. x<y has been flipped to y<x, to make it a loss (higher is worse.)   So wrong-ordered pairs contribute to the loss.
+ 1. x<y has been flipped to y<x, to make it a loss (higher is worse.)   So the loss is focussed on wrong-ordered pairs.
  2. Instead of treating all pairs equally, weight is given to the how far apart the pair is.
  3. That weight is raised to the power of *p*.
+ 4. We add a padding Γ to that distance.
 
 We'll go through these in turn.  1 is clear enough. There's a little more to 2 than meets the eye.   It makes intuitive sense that wrong-ordered pairs with wide separation should be given a bigger loss.   But something interesting is also happening as that separation approaches 0.  The loss goes to zero linearly, rather than a step-function.  So we've gotten rid of the discontinuity.
 
-In fact, if p were 1, the loss would simply be our old friend ReLu(y-x).   But we notice a hiccup, which reveals the need for the exponent *p*.  ReLu is not differentiable at 0.   That's not much of a problem in ReLu's more accustomed role as an activation function, but for our purposes the singularity at 0 lands directly on the thing we are most interested most in : the points where white and black elements pass each other.
+In fact, if p were 1 and Γ were 0, the loss would simply be our old friend ReLu(x-y).   But in this case we notice a hiccup, which reveals the need for the exponent *p*.  ReLu is not differentiable at 0.   That's not much of a problem in ReLu's more accustomed role as an activation function, but for our purposes the singularity at 0 lands directly on the thing we are most interested most in : the points where white and black elements pass each other.
 
 Fortunately,  raising ReLu to a power fixes this.  ReLu^p with p>1 is differentiable everywhere.  OK, so p>1.
 
@@ -109,7 +110,7 @@ And that's the basic idea as outlined in the paper.   We now ake some refinement
 
 Here we break a bit with the paper.    *Yan et. al* seem a little squeamish on the topic of choosing Γ and p, offering only that a *p* = 2 or *p* = 3 seems good and that Γ should be somewhere between 0.10 and 0.70.  Yan essentially wishes us luck with these parameters and bows out.  
 
-First, we permanently fix *p* = 2, because any self-respecting loss function should be a sum-of-squares.    (One reason for this is that it ensures the loss function is not only differentiable, but also *convex* and *twice differentiable*)
+First, we permanently fix *p* = 2, because any self-respecting loss function should be a sum-of-squares.    (One reason for this is that it ensures the loss function is not only differentiable, but also *convex*)
 
 Second and more importantly, let's take a look at Γ.   The heuristic of 'somewhere from 0.10 to 0.70' looks strange on the face of it; even if the predictions were normalized to be 0<x<1, this guidance seems overbroad, indifferent to the underlying distributions, and just weird.
 
