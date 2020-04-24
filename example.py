@@ -1,10 +1,10 @@
 # See this github repo - https://github.com/iridiumblue/roc-star
 
 
-epoches = 100
+epoches = 30
 INITIAL_LR=0.001
 
-BATCH_SIZE=600
+BATCH_SIZE=80
 USE_ROC_STAR=True
 USE_TRAINS=True
 KAGGLE=False
