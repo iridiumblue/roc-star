@@ -1,4 +1,5 @@
-# python3 neon.py --batch-size=64  --initial-lr=1e-3 --weight-decay=1e-6 --dropout-i=0.07 --dropout-o=0.10 --dropout-w=0.07 --dense-hidden-units=1024 --spacial-dropout=0.00 --use-roc-star
+#All the data you need is two pickle files available here - https://drive.google.com/drive/folders/1lY8Ddz_RNOqRCVmZGC4NDIKzf4KUxFPZ?usp=sharing
+
 
 TRUNC = 100000
 #WARNING : TRUNC truncates the dataset for speed of smoke-testing. Set to -1 for full test.
