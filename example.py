@@ -1,22 +1,15 @@
 #All the data you need is two pickle files available here - https://drive.google.com/drive/folders/1lY8Ddz_RNOqRCVmZGC4NDIKzf4KUxFPZ?usp=sharing
 
+# python3 neon.py --batch-size=64  --initial-lr=1e-3 --weight-decay=1e-6 --dropout-i=0.07 --dropout-o=0.10 --dropout-w=0.07 --dense-hidden-units=1024 --spacial-dropout=0.00 --use-roc-star
 
 TRUNC = 100000
 #WARNING : TRUNC truncates the dataset for speed of smoke-testing. Set to -1 for full test.
 RELOAD = False
+TRAINS=True
+EPOCHS=30
 
 
-hard_opts = [
-    '--batch-size=128',
-    '--initial-lr=1e-3',
-    '--weight-decay=1e-6',
-    '--dropout-i=0.10',
-    '--dropout-o=0.15',
-    '--dropout-w=0.10',
-    '--dense-hidden-units=2048',
-    '--spacial-dropout=0.00',
-    '--use-roc-star'
-]
+
 
 explore_dimensions = {
   'delta':(2.0),
@@ -30,7 +23,7 @@ explore_dimensions = {
 
 import sys
 raw_stdout = sys.stdout
-TRAINS=True
+
 if TRAINS :
     from trains import Task
 
@@ -52,8 +45,8 @@ simplefilter(action='ignore', category=FutureWarning)
 simplefilter(action='ignore', category=UserWarning)
 o_explore_dimensions=copy(explore_dimensions)
 
-EPOCHS=15
-KAGGLE = False
+
+KAGGLE = True
 PROG_AUC_UPDATE = 50
 
 
@@ -134,7 +127,7 @@ def init():
         _pickle.dump(embedding_matrix,open("embedding.pkl","wb"))
     else:
         print("Recovering tokenized text from pickle ...")
-        PICKLE_PATH = "../input/pickles/" if KAGGLE else ""
+        PICKLE_PATH = "" if KAGGLE else ""
         x_train,x_valid,y_train,y_valid =  _pickle.load(open(PICKLE_PATH+"tokenized.pkl","rb"))
         print("Reusing pickled embedding ...")
         embedding_matrix = _pickle.load(open(PICKLE_PATH+"embedding.pkl","rb"))
@@ -573,11 +566,13 @@ def train_model(h_params, model, x_train, x_valid, y_train, y_valid,  lr,
         print("Validation AUC = ", valid_auc)
         #print("Validation MET = ", met)
         print("\r Training AUC = ", train_roc_val)
-        if TRAINS :
-            logger.report_scalar(title=title, series=graph,
-                 value=valid_auc, iteration=epoch)
-            logger.report_scalar(title=title, series=graph+"_train",
-                 value=train_roc_val, iteration=epoch)
+        if valid_auc>0 and train_roc_val>0 :
+            if TRAINS :
+                logger.report_scalar(title=title, series=graph,
+                     value=valid_auc, iteration=epoch)
+                logger.report_scalar(title=title, series=graph+"_train",
+                     value=train_roc_val, iteration=epoch)
+
         #logger.report_scalar(title=title, series=graph,
         #     value=train_roc_val, iteration=epoch)
         #logger.report_scalar(title=title, series=graph,
@@ -604,18 +599,7 @@ def run(h_params,embedding_matrix, title='',graph=''):
                 BATCH_SIZE=h_params.batch_size, n_epochs=EPOCHS,title=title,graph=graph)
     return run_result
 
-h_params = {
-   '--use-roc-star':True,
-   '--initial-lr': 0.001,
-   '--dense-hidden-units':256,
-   '--lstm-units':128,
-   '--batch-size':8000,
-   '--bidirectional':True,
-   '--spacial-dropout':0.10,
-   '--dropout-w': 0.05,
-   '--dropout-i': 0.10,
-   '--dropout-o': 0.05
-}
+
 
 def dflags(FLAGS):
     print('=====  PARAMS  ==========')
@@ -665,7 +649,7 @@ def automate(FLAGS,embedding_matrix,explore_dimensions):
 
 if True:  #__name__ == '__main__':
     parser = argparse.ArgumentParser()
-    parser.add_argument('--auto',  action='store_true')
+
     parser.add_argument('--use-roc-star', action='store_true')
     parser.add_argument('--delta', type=float, default=2)
     parser.add_argument('--initial-lr', type=float, default=1e-3)
@@ -677,20 +661,38 @@ if True:  #__name__ == '__main__':
     parser.add_argument('--dropout-w', type=float,default=0.20)
     parser.add_argument('--dropout-i', type=float,default=0.20)
     parser.add_argument('--dropout-o', type=float,default=0.20)
-    FLAGS, unparsed = parser.parse_known_args()
+    parser.add_argument('--auto',  action='store_true')
+    #FLAGS, unparsed = parser.parse_known_args()
     #--batch-size=128  --initial-lr=1e-3 --weight-decay=1e-6 --dropout-i=0.07 --dropout-o=0.10 --dropout-w=0.07 --dense-hidden-units=1024 --spacial-dropout=0.00
+    hard_opts = [
+        '--auto'
+        '--batch-size=512',
+        '--initial-lr=1e-3',
+        '--weight-decay=1e-6',
+        '--dropout-i=0.0',
+        '--dropout-o=0.0',
+        '--dropout-w=0.0',
+        '--dense-hidden-units=1024',
+        '--spacial-dropout=0.00',
+        '--use-roc-star'
+    ]
     if not KAGGLE :
        FLAGS, unparsed = parser.parse_known_args()
     else:
        FLAGS, unparsed = parser.parse_known_args(args=hard_opts)
+       print("KAGGLE opts ...", FLAGS)
 
     #code.interact(local=dict(globals(), **locals()))
     init()
+    print('automatic ...',FLAGS.auto)
+    print('kaggle ', KAGGLE)
 
-    if not FLAGS.auto :
+    if False : #WARNING-fix not FLAGS.auto :
       run(FLAGS, embedding_matrix)
     else:
+      print('automating ....')
       automate(FLAGS, embedding_matrix,explore_dimensions)
 
 if TRAINS :
   print(f'TRAINS results page: {task._get_app_server()}/projects/{task.project}/experiments/{task.id}/output/log')
+
