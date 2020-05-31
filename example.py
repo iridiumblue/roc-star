@@ -2,7 +2,9 @@
 
 # python3 neon.py --batch-size=64  --initial-lr=1e-3 --weight-decay=1e-6 --dropout-i=0.07 --dropout-o=0.10 --dropout-w=0.07 --dense-hidden-units=1024 --spacial-dropout=0.00 --use-roc-star
 
-TRUNC = 100000
+# python3 neon.py --batch-size=64  --initial-lr=1e-3 --weight-decay=1e-6 --dropout-i=0.07 --dropout-o=0.10 --dropout-w=0.07 --dense-hidden-units=1024 --spacial-dropout=0.00 --use-roc-star
+
+TRUNC = 700000
 #WARNING : TRUNC truncates the dataset for speed of smoke-testing. Set to -1 for full test.
 RELOAD = False
 TRAINS=True
@@ -127,7 +129,7 @@ def init():
         _pickle.dump(embedding_matrix,open("embedding.pkl","wb"))
     else:
         print("Recovering tokenized text from pickle ...")
-        PICKLE_PATH = "" if KAGGLE else ""
+        PICKLE_PATH = "../input/" if KAGGLE else ""
         x_train,x_valid,y_train,y_valid =  _pickle.load(open(PICKLE_PATH+"tokenized.pkl","rb"))
         print("Reusing pickled embedding ...")
         embedding_matrix = _pickle.load(open(PICKLE_PATH+"embedding.pkl","rb"))
@@ -572,7 +574,7 @@ def train_model(h_params, model, x_train, x_valid, y_train, y_valid,  lr,
                      value=valid_auc, iteration=epoch)
                 logger.report_scalar(title=title, series=graph+"_train",
                      value=train_roc_val, iteration=epoch)
-
+        
         #logger.report_scalar(title=title, series=graph,
         #     value=train_roc_val, iteration=epoch)
         #logger.report_scalar(title=title, series=graph,
@@ -666,12 +668,12 @@ if True:  #__name__ == '__main__':
     #--batch-size=128  --initial-lr=1e-3 --weight-decay=1e-6 --dropout-i=0.07 --dropout-o=0.10 --dropout-w=0.07 --dense-hidden-units=1024 --spacial-dropout=0.00
     hard_opts = [
         '--auto'
-        '--batch-size=512',
+        '--batch-size=256',
         '--initial-lr=1e-3',
         '--weight-decay=1e-6',
-        '--dropout-i=0.0',
-        '--dropout-o=0.0',
-        '--dropout-w=0.0',
+        '--dropout-i=0.05',
+        '--dropout-o=0.05',
+        '--dropout-w=0.05',
         '--dense-hidden-units=1024',
         '--spacial-dropout=0.00',
         '--use-roc-star'
@@ -695,4 +697,5 @@ if True:  #__name__ == '__main__':
 
 if TRAINS :
   print(f'TRAINS results page: {task._get_app_server()}/projects/{task.project}/experiments/{task.id}/output/log')
+
 
