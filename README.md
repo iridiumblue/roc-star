@@ -147,7 +147,19 @@ In this way, white and black subsamples fit easily into GPU memory.   By reusing
 
 Here's the batch-loss function in PyTorch:
   
+    
     def roc_star_loss( _y_true, y_pred, gamma, _epoch_true, epoch_pred):
+        """
+        Nearly direct loss function for AUC.
+        See article,
+        C. Reiss, "Roc-star : An objective function for ROC-AUC that actually works."
+        https://github.com/iridiumblue/articles/blob/master/roc_star.md
+            _y_true: `Tensor`. Targets (labels).  Float either 0.0 or 1.0 .
+            y_pred: `Tensor` . Predictions.
+            gamma  : `Float` Gamma, as derived from last epoch.
+            _epoch_true: `Tensor`.  Targets (labels) from last epoch.
+            epoch_pred : `Tensor`.  Predicions from last epoch.
+        """
         #convert labels to boolean
         y_true = (_y_true>=0.50)
         epoch_true = (_epoch_true>=0.50)
@@ -199,7 +211,8 @@ Here's the batch-loss function in PyTorch:
             len3=0
 
         if (torch.sum(m2)+torch.sum(m3))!=0 :
-           res2 = (torch.sum(m2)+torch.sum(m3))/(len2+len3)
+           res2 = torch.sum(m2)/max_pos+torch.sum(m3)/max_neg
+           #code.interact(local=dict(globals(), **locals()))
         else:
            res2 = torch.sum(m2)+torch.sum(m3)
 
@@ -212,9 +225,15 @@ Note that there are some extra parameters.   We are passing in the training set 
 
 Similarly, Γ is an expensive calculation.    We again use the sub-sampling trick, but increase the size of the sub-samples to ~10,000 to ensure an accurate estimate.   To keep performance clipping along, we recompute this value only once per epoch.  Here's the function to do that :
  
-    def epoch_update_gamma(y_true,y_pred, epoch=-1):
-        DELTA = 2
-        SUB_SAMPLE_SIZE = 10000.0
+    def epoch_update_gamma(y_true,y_pred, epoch=-1,delta=2):
+        """
+        Calculate gamma from last epoch's targets and predictions.
+        Gamma is updated at the end of each epoch.
+        y_true: `Tensor`. Targets (labels).  Float either 0.0 or 1.0 .
+        y_pred: `Tensor` . Predictions.
+        """
+        DELTA = delta
+        SUB_SAMPLE_SIZE = 2000.0
         pos = y_pred[y_true==1]
         neg = y_pred[y_true==0] # yo pytorch, no boolean tensors or operators?  Wassap?
         # subsample the training set for performance
@@ -237,15 +256,18 @@ Similarly, Γ is an expensive calculation.    We again use the sub-sampling tric
         left_wing = int(ln_Lp*DELTA)
         left_wing = max([0,left_wing])
         left_wing = min([ln_neg,left_wing])
+        default_gamma=torch.tensor(0.2, dtype=torch.float).cuda()
         if diff_neg.shape[0] > 0 :
            gamma = diff_neg[left_wing]
         else:
-           gamma = 0.2
+           gamma = default_gamma # default=torch.tensor(0.2, dtype=torch.float).cuda() #zoink
         L1 = diff[diff>-1.0*gamma]
         ln_L1 = L1.shape[0]
         if epoch > -1 :
             return gamma
-        return 0.10
+        else :
+            return default_gamma
+
 
 Here's the helicopter view showing how to use the two functions as we loop on epochs, then on batches :
 
@@ -276,7 +298,7 @@ Here's the helicopter view showing how to use the two functions as we loop on ep
         #...
 
 A complete working example can be found here, [example.py](https://github.com/iridiumblue/roc-star/blob/master/example.py) 
-For a faster jump-star you can fork this kernel on Kaggle : https://www.kaggle.com/iridiumblue/roc-star
+For a faster jump-star you can fork this kernel on Kaggle : [kernel](https://www.kaggle.com/iridiumblue/roc-star-an-auc-loss-function-to-challenge-bxe)
 
 Below we chart the performance of roc-star against the same model using BCE.    Experience shows that roc-star can often simply be swapped into any model using BCE with a good chance at a performance increase.
 
