@@ -1,37 +1,67 @@
-#All the data you need is two pickle files available here - https://drive.google.com/drive/folders/1lY8Ddz_RNOqRCVmZGC4NDIKzf4KUxFPZ?usp=sharing
+#'''
+A demonstration of a new and experimental loss function which directly targets AUC/ROC, 
+and is seen to outperform BxE in early testing. See paper up here - 
+https://github.com/iridiumblue/roc-star.
 
-# python3 neon.py --batch-size=64  --initial-lr=1e-3 --weight-decay=1e-6 --dropout-i=0.07 --dropout-o=0.10 --dropout-w=0.07 --dense-hidden-units=1024 --spacial-dropout=0.00 --use-roc-star
+The test is a simple sentiment analysis binary classifier turned loose on tweets from Twitter. 
+Text embeddings have been precomputed and pickled for speed. 
+TRUNC truncates the training set, set it to -1 for all 1.6 M sample tweets.
 
-# python3 neon.py --batch-size=64  --initial-lr=1e-3 --weight-decay=1e-6 --dropout-i=0.07 --dropout-o=0.10 --dropout-w=0.07 --dense-hidden-units=1024 --spacial-dropout=0.00 --use-roc-star
+Note that for the first epoch (only), the loss function is BxE. That is just to kickstart 
+the new loss function roc_star_loss. That's a good practice to stick to if you want 
+to give this a try for your model. Note also that roc_star_loss requires a call to 
+epoch_update_gamma at the end of each epoch.
 
-TRUNC = 700000
+'''
+
+
+import numpy as np # linear algebra
+import pandas as pd # data processing, CSV file I/O (e.g. pd.read_csv)
+#* * Best validation score
+'''
+
+'''
+TRUNC = 200000
 #WARNING : TRUNC truncates the dataset for speed of smoke-testing. Set to -1 for full test.
 RELOAD = False
-TRAINS=True
-EPOCHS=30
+TRAINS=False
+EPOCHS=20
+KAGGLE = True
 
-
+hard_opts = [
+        '--auto'
+        '--batch-size=256',
+        '--initial-lr=1e-3',
+        '--weight-decay=1e-4',
+        '--dropout-i=0.07',
+        '--dropout-o=0.07',
+        '--dropout-w=0.07',
+        '--dense-hidden-units=1024',
+        '--spacial-dropout=0.00',
+        '--use-roc-star'
+]
 
 
 explore_dimensions = {
-  'delta':(2.0),
-  #'initial_lr' :(1e-3,2e-3,4e-3),
+  'dropout':[0.10],
+  'bidirectional' : [True],
+  'delta':[2.0],
+  'initial_lr' : [1e-3], #,4e-3),
+  'weight_decay':[1e-3],
   #'delta': (2.0)
-  #'lstm_units'  :(50,100),
-  #'dense_hidden_units':(64,128)
+  'lstm_units'  :[64],
+  'dense_hidden_units':[2000]
 }
 
 
 
 import sys
-raw_stdout = sys.stdout
 
 if TRAINS :
     from trains import Task
-
-from pkbar import Kbar as Progbar
+if not KAGGLE :
+   from pkbar import Kbar as Progbar
 import traceback
-
 
 import argparse
 
@@ -48,15 +78,12 @@ simplefilter(action='ignore', category=UserWarning)
 o_explore_dimensions=copy(explore_dimensions)
 
 
-KAGGLE = True
-PROG_AUC_UPDATE = 50
 
+PROG_AUC_UPDATE = 50
 
 max_features = 200000
 maxlen = 30
 embed_size = 300
-
-
 
 import code
 import torch
@@ -72,13 +99,10 @@ from keras.preprocessing import text, sequence
 from sklearn.metrics import roc_auc_score
 import torch.nn.functional as F
 
-
 SEED = 43
 
 torch.manual_seed(SEED)
 torch.backends.cudnn.deterministic = True
-
-
 
 x_train_torch,x_valid_torch,y_train_torch,y_valid_torch = None,None,None,None
 embedding_matrix = None
@@ -129,7 +153,7 @@ def init():
         _pickle.dump(embedding_matrix,open("embedding.pkl","wb"))
     else:
         print("Recovering tokenized text from pickle ...")
-        PICKLE_PATH = "../input/" if KAGGLE else ""
+        PICKLE_PATH = "../input/picklejar/" if KAGGLE else ""
         x_train,x_valid,y_train,y_valid =  _pickle.load(open(PICKLE_PATH+"tokenized.pkl","rb"))
         print("Reusing pickled embedding ...")
         embedding_matrix = _pickle.load(open(PICKLE_PATH+"embedding.pkl","rb"))
@@ -195,15 +219,19 @@ def epoch_update_gamma(y_true,y_pred, epoch=-1,delta=2):
         left_wing = int(ln_Lp*DELTA)
         left_wing = max([0,left_wing])
         left_wing = min([ln_neg,left_wing])
+        default_gamma=torch.tensor(0.2, dtype=torch.float).cuda()
         if diff_neg.shape[0] > 0 :
            gamma = diff_neg[left_wing]
         else:
-           gamma = 0.2
+           gamma = default_gamma # default=torch.tensor(0.2, dtype=torch.float).cuda() #zoink
         L1 = diff[diff>-1.0*gamma]
         ln_L1 = L1.shape[0]
         if epoch > -1 :
             return gamma
-        return 0.10
+        else :
+            return default_gamma
+
+
 
 def roc_star_loss( _y_true, y_pred, gamma, _epoch_true, epoch_pred):
         """
@@ -268,7 +296,8 @@ def roc_star_loss( _y_true, y_pred, gamma, _epoch_true, epoch_pred):
             len3=0
 
         if (torch.sum(m2)+torch.sum(m3))!=0 :
-           res2 = (torch.sum(m2)+torch.sum(m3))*(len2+len3)/(len2*len3)
+           res2 = torch.sum(m2)/max_pos+torch.sum(m3)/max_neg
+           #code.interact(local=dict(globals(), **locals()))
         else:
            res2 = torch.sum(m2)+torch.sum(m3)
 
@@ -439,27 +468,32 @@ class NeuralNet(nn.Module):
 
         return result
 
+
+best_result={}
+
 def train_model(h_params, model, x_train, x_valid, y_train, y_valid,  lr,
                 BATCH_SIZE=1000, n_epochs=EPOCHS, title='', graph=''):
+    global best_result
     param_lrs = [{'params': param, 'lr': lr} for param in model.parameters()]
+    #code.interact(local=dict(globals(), **locals()))
+    if True :
+        optimizer = torch.optim.AdamW(param_lrs, lr=h_params.initial_lr,
+                    betas=(0.9, 0.999),
+                    eps=1e-6,
+                    #weight_decay=1e-3, # this value suggested by authors of LSTM/Variational dropout,
+                                  # see https://discuss.pytorch.org/t/variational-dropout/23030/9
 
-    optimizer = torch.optim.Adam(param_lrs, lr=h_params.initial_lr,
-                betas=(0.9, 0.999),
-                eps=1e-6,
-                #weight_decay=1e-3, # this value suggested by authors of LSTM/Variational dropout,
-                              # see https://discuss.pytorch.org/t/variational-dropout/23030/9
+                    amsgrad=False
+                    )
+    else :
+        optimizer = torch.optim.SGD(param_lrs, lr=h_params.initial_lr,
+                    #betas=(0.9, 0.999),
+                    #eps=1e-6,
+                    weight_decay=1e-3, # this value suggested by authors of LSTM/Variational dropout,
+                                  # see https://discuss.pytorch.org/t/variational-dropout/23030/9
 
-                amsgrad=False
-                )
-
-    #optimizer = torch.optim.SGD(param_lrs, lr=h_params.initial_lr,
-                #betas=(0.9, 0.999),
-                #eps=1e-6,
-                #weight_decay=1e-3, # this value suggested by authors of LSTM/Variational dropout,
-                              # see https://discuss.pytorch.org/t/variational-dropout/23030/9
-
-                #amsgrad=False
-    #            )
+                    #amsgrad=False
+                    )
     #scheduler = torch.optim.lr_scheduler.ExponentialLR(optimizer=optimizer, gamma=0.6)
 
     train_loader = torch.utils.data.DataLoader(torch.utils.data.TensorDataset(x_train, y_train), batch_size=BATCH_SIZE, shuffle=True)
@@ -560,12 +594,20 @@ def train_model(h_params, model, x_train, x_valid, y_train, y_valid,  lr,
 
 
         elapsed_time = time.time() - start_time
-        print("\n\nParams :", title," :: ", graph)
+        if epoch==0 :
+           print("\n\n* * * * * * * * * * * Params :", title," :: ", graph)
         print('\nEpoch {}/{} \t loss={:.4f} \t time={:.2f}s'.format(
               epoch + 1, n_epochs, avg_loss, elapsed_time))
 
         print("Gamma = ", epoch_gamma)
         print("Validation AUC = ", valid_auc)
+        if not ('auc' in best_result) or best_result['auc']<valid_auc :
+            best_result['auc']= valid_auc
+            best_result['params'] = copy(h_params)
+            best_result['epoch'] = epoch+1
+            print('* * grabbing ', best_result)
+
+
         #print("Validation MET = ", met)
         print("\r Training AUC = ", train_roc_val)
         if valid_auc>0 and train_roc_val>0 :
@@ -574,7 +616,7 @@ def train_model(h_params, model, x_train, x_valid, y_train, y_valid,  lr,
                      value=valid_auc, iteration=epoch)
                 logger.report_scalar(title=title, series=graph+"_train",
                      value=train_roc_val, iteration=epoch)
-        
+
         #logger.report_scalar(title=title, series=graph,
         #     value=train_roc_val, iteration=epoch)
         #logger.report_scalar(title=title, series=graph,
@@ -596,7 +638,7 @@ def run(h_params,embedding_matrix, title='',graph=''):
     loss_fn=nn.BCEWithLogitsLoss(reduction='mean')
     model = NeuralNet(embedding_matrix,h_params)
     model.cuda()
-
+    h_params.dropout_i,h_params.dropout_o,h_params.dropout_w = (h_params.dropout,h_params.dropout,h_params.dropout)
     run_result = train_model(h_params,model, x_train_torch, x_valid_torch, y_train_torch, y_valid_torch,  lr=h_params.initial_lr,
                 BATCH_SIZE=h_params.batch_size, n_epochs=EPOCHS,title=title,graph=graph)
     return run_result
@@ -615,14 +657,23 @@ def dflags(FLAGS):
 def describe_dims(FLAGS, explore_dimension=o_explore_dimensions):
     return " | ".join([o + ':' + str(FLAGS.__getattribute__(o)) for o in explore_dimension])
 
-SKIP_BXE=False
+SKIP_BXE=True
+SKIP_ROC=False
+
 def descend_dimensions(explore_dimensions,FLAGS,results):
+    print("explore_dimensions :", explore_dimensions)
     explore_dimensions = copy(explore_dimensions)
+
     if len(explore_dimensions)>0 :
-       next = explore_dimensions.popitem()
-       FLAGS.__setattr__(next[0],next[1])
-       ##code.interact(local=dict(globals(), **locals()))
-       descend_dimensions(explore_dimensions, FLAGS,results)
+       next_key = list(explore_dimensions.keys())[0]
+       next_val_list = explore_dimensions[next_key]
+       del explore_dimensions[next_key]
+
+
+       for v in next_val_list :
+          FLAGS.__setattr__(next_key,v)
+          #code.interact(local=dict(globals(), **locals()))
+          descend_dimensions(explore_dimensions, FLAGS,results)
 
     else:
 
@@ -630,8 +681,8 @@ def descend_dimensions(explore_dimensions,FLAGS,results):
 
        title = describe_dims(FLAGS)
        FLAGS.__setattr__('use_roc_star', True)
-
-       results_ROC= run(FLAGS, embedding_matrix,title,'ROC_STAR')
+       if not SKIP_ROC :
+           results_ROC= run(FLAGS, embedding_matrix,title,'ROC_STAR')
        if not SKIP_BXE :
            FLAGS.__setattr__('use_roc_star', False)
            #title = describe_dims(FLAGS)
@@ -640,14 +691,14 @@ def descend_dimensions(explore_dimensions,FLAGS,results):
            results_BXE = ( (0,) * len(results_ROC))
 
 def automate(FLAGS,embedding_matrix,explore_dimensions):
-    explore_dimensions = copy(explore_dimensions)
+
     #explore_dimensions.pop('use_roc_star')
-    FLAGS.__setattr__('use_roc_star', True)
-    results_ROC=[]
-    descend_dimensions(explore_dimensions, FLAGS,results_ROC)
-    FLAGS.__setattr__('use_roc_star', False)
-    results_BXE=[]
-    descend_dimensions(explore_dimensions, FLAGS,results_BXE)
+    #FLAGS.__setattr__('use_roc_star', True)
+    results=[]
+    descend_dimensions(explore_dimensions, FLAGS,results)
+    #FLAGS.__setattr__('use_roc_star', False)
+    #results_BXE=[]
+    #descend_dimensions(explore_dimensions, FLAGS,results_BXE)
 
 if True:  #__name__ == '__main__':
     parser = argparse.ArgumentParser()
@@ -663,21 +714,12 @@ if True:  #__name__ == '__main__':
     parser.add_argument('--dropout-w', type=float,default=0.20)
     parser.add_argument('--dropout-i', type=float,default=0.20)
     parser.add_argument('--dropout-o', type=float,default=0.20)
+    parser.add_argument('--dropout', type=float,default=0.20)
+
     parser.add_argument('--auto',  action='store_true')
     #FLAGS, unparsed = parser.parse_known_args()
     #--batch-size=128  --initial-lr=1e-3 --weight-decay=1e-6 --dropout-i=0.07 --dropout-o=0.10 --dropout-w=0.07 --dense-hidden-units=1024 --spacial-dropout=0.00
-    hard_opts = [
-        '--auto'
-        '--batch-size=256',
-        '--initial-lr=1e-3',
-        '--weight-decay=1e-6',
-        '--dropout-i=0.05',
-        '--dropout-o=0.05',
-        '--dropout-w=0.05',
-        '--dense-hidden-units=1024',
-        '--spacial-dropout=0.00',
-        '--use-roc-star'
-    ]
+
     if not KAGGLE :
        FLAGS, unparsed = parser.parse_known_args()
     else:
@@ -697,5 +739,15 @@ if True:  #__name__ == '__main__':
 
 if TRAINS :
   print(f'TRAINS results page: {task._get_app_server()}/projects/{task.project}/experiments/{task.id}/output/log')
+
+print('\r\r\r * * Best validation score ',best_result)
+
+# Input data files are available in the read-only "../input/" directory
+# For example, running this (by clicking run or pressing Shift+Enter) will list all files under the input directory
+
+import os
+for dirname, _, filenames in os.walk('/kaggle/input'):
+    for filename in filenames:
+        print(os.path.join(dirname, filename))
 
 
