@@ -1,239 +1,126 @@
-#'''
-A demonstration of a new and experimental loss function which directly targets AUC/ROC, 
-and is seen to outperform BxE in early testing. See paper up here - 
+'''
+A demonstration of a new and experimental loss function which directly targets AUC/ROC,
+and is seen to outperform BxE in early testing. See paper up here -
 https://github.com/iridiumblue/roc-star.
 
-The test is a simple sentiment analysis binary classifier turned loose on tweets from Twitter. 
-Text embeddings have been precomputed and pickled for speed. 
+The test is a simple sentiment analysis binary classifier turned loose on tweets from Twitter.
+Text embeddings have been precomputed and pickled for speed.
 TRUNC truncates the training set, set it to -1 for all 1.6 M sample tweets.
 
-Note that for the first epoch (only), the loss function is BxE. That is just to kickstart 
-the new loss function roc_star_loss. That's a good practice to stick to if you want 
-to give this a try for your model. Note also that roc_star_loss requires a call to 
+Note that for the first epoch (only), the loss function is BxE. That is just to kickstart
+the new loss function roc_star_loss. That's a good practice to stick to if you want
+to give this a try for your model. Note also that roc_star_loss requires a call to
 epoch_update_gamma at the end of each epoch.
-
 '''
 
 
-import numpy as np # linear algebra
-import pandas as pd # data processing, CSV file I/O (e.g. pd.read_csv)
-#* * Best validation score
-'''
-
-'''
-TRUNC = 200000
-#WARNING : TRUNC truncates the dataset for speed of smoke-testing. Set to -1 for full test.
-RELOAD = False
-TRAINS=False
-EPOCHS=20
-KAGGLE = True
-
-hard_opts = [
-        '--auto'
-        '--batch-size=256',
-        '--initial-lr=1e-3',
-        '--weight-decay=1e-4',
-        '--dropout-i=0.07',
-        '--dropout-o=0.07',
-        '--dropout-w=0.07',
-        '--dense-hidden-units=1024',
-        '--spacial-dropout=0.00',
-        '--use-roc-star'
-]
-
-
-explore_dimensions = {
-  'dropout':[0.10],
-  'bidirectional' : [True],
-  'delta':[2.0],
-  'initial_lr' : [1e-3], #,4e-3),
-  'weight_decay':[1e-3],
-  #'delta': (2.0)
-  'lstm_units'  :[64],
-  'dense_hidden_units':[2000]
-}
-
-
-
-import sys
-
-if TRAINS :
-    from trains import Task
-if not KAGGLE :
-   from pkbar import Kbar as Progbar
-import traceback
-
-import argparse
-
-###### fix for mean columnwise auc
-
-#https://www.kaggle.com/yekenot/pooled-gru-fasttext
 from warnings import simplefilter
 import time
-import sys
 from copy import copy
+import torch
+import torch.nn.functional as F
+import torch.nn as nn
+from torch.nn.utils.rnn import PackedSequence
+import numpy as np
+import _pickle
+import gc
+from pathlib2 import Path
+from sklearn.metrics import roc_auc_score
+from trains import Task
+from trains import StorageManager
+from pkbar import Kbar as Progbar
+import argparse
+
 # ignore all future warnings
 simplefilter(action='ignore', category=FutureWarning)
 simplefilter(action='ignore', category=UserWarning)
-o_explore_dimensions=copy(explore_dimensions)
-
-
-
-PROG_AUC_UPDATE = 50
-
-max_features = 200000
-maxlen = 30
-embed_size = 300
-
-import code
-import torch
-import pandas as pd
-import numpy as np
-import torch.nn as nn
-from torch.nn.utils.rnn import PackedSequence
-from typing import *
-import _pickle
-import gc
-
-from keras.preprocessing import text, sequence
-from sklearn.metrics import roc_auc_score
-import torch.nn.functional as F
-
-SEED = 43
-
-torch.manual_seed(SEED)
-torch.backends.cudnn.deterministic = True
 
 x_train_torch,x_valid_torch,y_train_torch,y_valid_torch = None,None,None,None
 embedding_matrix = None
 task=None
 logger=None
-EMBEDDING_FILE='/media/chris/Storage/big/glove/glove.6B.300d.txt'
+best_result={}
+max_features = 200000
+embed_size = 300
 
-def init():
-    global x_train_torch,x_valid_torch,y_train_torch,y_valid_torch
+
+def init(h_params):
+    global x_train_torch, x_valid_torch, y_train_torch, y_valid_torch
     global embedding_matrix
-    global task,logger
-    if RELOAD :
-        print("Warning - reloading dataset")
+    global task, logger
 
-        train = pd.read_csv('tweets.csv',engine='python') # from https://www.kaggle.com/kazanova/sentiment140
-        train = train.sample(frac=1) ; gc.collect(2)
+    print("Recovering tokenized text from pickle ...")
+    tokenized = StorageManager.get_local_copy(
+        remote_url="https://allegro-datasets.s3.amazonaws.com/roc_star_data"
+                   "/tokenized.pkl.zip",
+        name="tokenized",
+    )
+    embedding = StorageManager.get_local_copy(
+        remote_url="https://allegro-datasets.s3.amazonaws.com/roc_star_data"
+                   "/embedding.pkl.zip",
+        name="embedding",
+    )
 
-        X_train = preprocess(train["text"])
-        #code.interact(local=dict(globals(), **locals()))
-        y_train = train["sentiment"]==0
-        del train; gc.collect(2)
-        print("Tokenizing ...")
-        tokenizer = text.Tokenizer(num_words=max_features)
-        tokenizer.fit_on_texts(list(X_train))
-        x_train = tokenizer.texts_to_sequences(X_train)
-        x_train = sequence.pad_sequences(x_train, maxlen=maxlen)
-        del X_train; gc.collect(2)
-        VALID_SIZE = 50000
-        x_valid = x_train[-50000:]
-        x_train = x_train[:-50000]
-        y_train = np.array(1*y_train)
-        y_valid = y_train[-50000:]
-        y_train = y_train[:-50000]
-        print("Dumping tokenized training data to pickle ...")
-        _pickle.dump((x_train,x_valid,y_train,y_valid),open("tokenized.pkl","wb"))
-        print('building embedding ...')
-        def get_coefs(word, *arr): return word, np.asarray(arr, dtype='float32')
-        embeddings_index = dict(get_coefs(*o.rstrip().rsplit(' ')) for o in open(EMBEDDING_FILE))
-
-        word_index = tokenizer.word_index
-        nb_words = min(max_features, len(word_index))
-        embedding_matrix = np.zeros((nb_words, embed_size))
-        for word, i in word_index.items():
-            if i >= max_features: continue
-            embedding_vector = embeddings_index.get(word)
-            if embedding_vector is not None: embedding_matrix[i] = embedding_vector
-        print("Dumping embedding matrix")
-        _pickle.dump(embedding_matrix,open("embedding.pkl","wb"))
-    else:
-        print("Recovering tokenized text from pickle ...")
-        PICKLE_PATH = "../input/picklejar/" if KAGGLE else ""
-        x_train,x_valid,y_train,y_valid =  _pickle.load(open(PICKLE_PATH+"tokenized.pkl","rb"))
-        print("Reusing pickled embedding ...")
-        embedding_matrix = _pickle.load(open(PICKLE_PATH+"embedding.pkl","rb"))
+    x_train, x_valid, y_train, y_valid = _pickle.load(open(Path(tokenized, "tokenized.pkl"), "rb"))
+    print("Reusing pickled embedding ...")
+    embedding_matrix = _pickle.load(open(Path(embedding, "embedding.pkl"), "rb"))
 
     print("Moving data to GPU ...")
-    if TRUNC>-1 :
-        print(f"\r\r * * WARNING training set truncated to first {TRUNC} items.\r\r")
+    if h_params.trunc>-1 :
+        print(f"\r\r * * WARNING training set truncated to first {h_params.trunc} items.\r\r")
 
-    x_train_torch = torch.tensor(x_train[:TRUNC], dtype=torch.long).cuda()
+    x_train_torch = torch.tensor(x_train[:h_params.trunc], dtype=torch.long).cuda()
     x_valid_torch = torch.tensor(x_valid, dtype=torch.long).cuda()
-    y_train_torch = torch.tensor(y_train[:TRUNC], dtype=torch.float32).cuda()
+    y_train_torch = torch.tensor(y_train[:h_params.trunc], dtype=torch.float32).cuda()
     y_valid_torch = torch.tensor(y_valid, dtype=torch.float32).cuda()
-    del x_train,y_train,x_valid,y_valid; gc.collect(2)
-    if TRAINS :
-        if not KAGGLE :
-           task = Task.init(project_name='local ROC flyover', task_name='Opener')
-        else:
-           task = Task.init(project_name='Kaggle ROC flyover', task_name='Opener')
-        logger = task.get_logger()
+    del x_train, y_train, x_valid, y_valid; gc.collect(2)
 
-def preprocess(data):
-    '''
-    Credit goes to https://www.kaggle.com/gpreda/jigsaw-fast-compact-solution
-    '''
-    punct = "/-'?!.,#$%\'()*+-/:;<=>@[\\]^_`{|}~`" + '""“”’' + '∞θ÷α•à−β∅³π‘₹´°£€\×™√²—–&'
-    def clean_special_chars(text, punct):
-        for p in punct:
-            text = text.replace(p, ' ')
-        return text
-
-    data = data.astype(str).apply(lambda x: clean_special_chars(x, punct))
-    return data
+    task = Task.init(project_name='local ROC flyover', task_name='Opener')
+    logger = task.get_logger()
 
 
-def epoch_update_gamma(y_true,y_pred, epoch=-1,delta=2):
+def epoch_update_gamma(y_true, y_pred, epoch=-1, delta=2):
         """
         Calculate gamma from last epoch's targets and predictions.
         Gamma is updated at the end of each epoch.
         y_true: `Tensor`. Targets (labels).  Float either 0.0 or 1.0 .
         y_pred: `Tensor` . Predictions.
         """
-        DELTA = delta
-        SUB_SAMPLE_SIZE = 2000.0
+        sub_sample_size = 2000.0
         pos = y_pred[y_true==1]
         neg = y_pred[y_true==0] # yo pytorch, no boolean tensors or operators?  Wassap?
         # subsample the training set for performance
         cap_pos = pos.shape[0]
         cap_neg = neg.shape[0]
-        pos = pos[torch.rand_like(pos) < SUB_SAMPLE_SIZE/cap_pos]
-        neg = neg[torch.rand_like(neg) < SUB_SAMPLE_SIZE/cap_neg]
+        pos = pos[torch.rand_like(pos) < sub_sample_size/cap_pos]
+        neg = neg[torch.rand_like(neg) < sub_sample_size/cap_neg]
         ln_pos = pos.shape[0]
         ln_neg = neg.shape[0]
         pos_expand = pos.view(-1,1).expand(-1,ln_neg).reshape(-1)
         neg_expand = neg.repeat(ln_pos)
         diff = neg_expand - pos_expand
-        ln_All = diff.shape[0]
         Lp = diff[diff>0] # because we're taking positive diffs, we got pos and neg flipped.
         ln_Lp = Lp.shape[0]-1
         diff_neg = -1.0 * diff[diff<0]
         diff_neg = diff_neg.sort()[0]
         ln_neg = diff_neg.shape[0]-1
         ln_neg = max([ln_neg, 0])
-        left_wing = int(ln_Lp*DELTA)
+        left_wing = int(ln_Lp*delta)
         left_wing = max([0,left_wing])
         left_wing = min([ln_neg,left_wing])
-        default_gamma=torch.tensor(0.2, dtype=torch.float).cuda()
+        default_gamma = torch.tensor(0.2, dtype=torch.float).cuda()
         if diff_neg.shape[0] > 0 :
-           gamma = diff_neg[left_wing]
+            gamma = diff_neg[left_wing]
         else:
-           gamma = default_gamma # default=torch.tensor(0.2, dtype=torch.float).cuda() #zoink
+            gamma = default_gamma # default=torch.tensor(0.2, dtype=torch.float).cuda() #zoink
         L1 = diff[diff>-1.0*gamma]
-        ln_L1 = L1.shape[0]
         if epoch > -1 :
             return gamma
         else :
             return default_gamma
 
 
-
-def roc_star_loss( _y_true, y_pred, gamma, _epoch_true, epoch_pred):
+def roc_star_loss(_y_true, y_pred, gamma, _epoch_true, epoch_pred):
         """
         Nearly direct loss function for AUC.
         See article,
@@ -262,7 +149,6 @@ def roc_star_loss( _y_true, y_pred, gamma, _epoch_true, epoch_pred):
         max_pos = 1000 # Max number of positive training samples
         max_neg = 1000 # Max number of positive training samples
         cap_pos = epoch_pos.shape[0]
-        cap_neg = epoch_neg.shape[0]
         epoch_pos = epoch_pos[torch.rand_like(epoch_pos) < max_pos/cap_pos]
         epoch_neg = epoch_neg[torch.rand_like(epoch_neg) < max_neg/cap_pos]
 
@@ -277,10 +163,8 @@ def roc_star_loss( _y_true, y_pred, gamma, _epoch_true, epoch_pred):
             diff2 = neg_expand - pos_expand + gamma
             l2 = diff2[diff2>0]
             m2 = l2 * l2
-            len2 = l2.shape[0]
         else:
             m2 = torch.tensor([0], dtype=torch.float).cuda()
-            len2 = 0
 
         # Similarly, compare negative batch elements against (subsampled) positive elements
         if ln_neg>0 :
@@ -290,20 +174,18 @@ def roc_star_loss( _y_true, y_pred, gamma, _epoch_true, epoch_pred):
             diff3 = neg_expand - pos_expand + gamma
             l3 = diff3[diff3>0]
             m3 = l3*l3
-            len3 = l3.shape[0]
         else:
             m3 = torch.tensor([0], dtype=torch.float).cuda()
-            len3=0
 
         if (torch.sum(m2)+torch.sum(m3))!=0 :
-           res2 = torch.sum(m2)/max_pos+torch.sum(m3)/max_neg
-           #code.interact(local=dict(globals(), **locals()))
+            res2 = torch.sum(m2)/max_pos+torch.sum(m3)/max_neg
         else:
-           res2 = torch.sum(m2)+torch.sum(m3)
+            res2 = torch.sum(m2)+torch.sum(m3)
 
         res2 = torch.where(torch.isnan(res2), torch.zeros_like(res2), res2)
 
         return res2
+
 
 #https://github.com/keitakurita/Better_LSTM_PyTorch/blob/master/better_lstm/model.py
 class VariationalDropout(nn.Module):
@@ -384,19 +266,7 @@ class LSTM(nn.LSTM):
         seq, state = super().forward(input, hx=hx)
         return self.output_drop(seq), state
 
-class SpatialDropout(nn.Dropout2d):
-    def forward(self, x):
-        x = x.unsqueeze(2)    # (N, T, 1, K)
-        x = x.permute(0, 3, 2, 1)  # (N, K, 1, T)
-        x = super(SpatialDropout, self).forward(x)  # (N, K, 1, T), some features are masked
-        x = x.permute(0, 3, 2, 1)  # (N, T, 1, K)
-        x = x.squeeze(2)  # (N, T, K)
-        return x
 
-def quadratic(tens):
-    t2 = torch.exp(tens)*torch.cos(tens)
-    tc = torch.cat((tens,t2),1)
-    return tc
 
 class NeuralNet(nn.Module):
     def __init__(self, embedding_matrix,h_params):
@@ -406,7 +276,6 @@ class NeuralNet(nn.Module):
         self.embedding = nn.Embedding(max_features, embed_size)
         self.embedding.weight = nn.Parameter(torch.tensor(embedding_matrix, dtype=torch.float32))
         self.embedding.weight.requires_grad = False
-        self.embedding_dropout = SpatialDropout(h_params.spacial_dropout)
         self.h_params = copy(h_params)
 
         self.c1 = nn.Conv1d(300,kernel_size=2,out_channels=300,padding=1)
@@ -433,7 +302,6 @@ class NeuralNet(nn.Module):
 
     def forward(self, x):
         h_embedding = self.embedding(x)
-        #h_embedding = self.embedding_dropout(h_embedding)
         h1 = h_embedding.permute(0, 2, 1)
 
         q1 =  self.c1(h1)
@@ -452,66 +320,41 @@ class NeuralNet(nn.Module):
         h_conc_linear2  = self.linear2(h_conc)
 
         hidden = h_conc + h_conc_linear1 + h_conc_linear2
-        #hidden = self.hey_norm(hidden)
-        #hidden_sq = quadratic(hidden)
-        #hidden_sq = torch.cat((hidden,hidden_sq),1) # quadratic trick
-        #hidden = F.selu(hidden)
         hidden = F.selu(self.linear_out(hidden))
         hidden =  F.selu(self.linear_xtra(hidden))
         hidden =  F.selu(self.linear_xtra2(hidden))
         hidden =  F.sigmoid(self.linear_out2(hidden))
 
         result=hidden.flatten()
-        #self.lstm1.flatten_parameters()
-        #self.lstm2.flatten_parameters()
-        #aux_result = self.linear_aux_out(hidden1)
 
         return result
 
 
-best_result={}
 
 def train_model(h_params, model, x_train, x_valid, y_train, y_valid,  lr,
-                BATCH_SIZE=1000, n_epochs=EPOCHS, title='', graph=''):
+                batch_size=1000, n_epochs=20, title='', graph=''):
     global best_result
     param_lrs = [{'params': param, 'lr': lr} for param in model.parameters()]
-    #code.interact(local=dict(globals(), **locals()))
-    if True :
-        optimizer = torch.optim.AdamW(param_lrs, lr=h_params.initial_lr,
-                    betas=(0.9, 0.999),
-                    eps=1e-6,
-                    #weight_decay=1e-3, # this value suggested by authors of LSTM/Variational dropout,
-                                  # see https://discuss.pytorch.org/t/variational-dropout/23030/9
+    optimizer = torch.optim.AdamW(param_lrs, lr=h_params.initial_lr,
+                betas=(0.9, 0.999),
+                eps=1e-6,
+                amsgrad=False
+                )
 
-                    amsgrad=False
-                    )
-    else :
-        optimizer = torch.optim.SGD(param_lrs, lr=h_params.initial_lr,
-                    #betas=(0.9, 0.999),
-                    #eps=1e-6,
-                    weight_decay=1e-3, # this value suggested by authors of LSTM/Variational dropout,
-                                  # see https://discuss.pytorch.org/t/variational-dropout/23030/9
+    train_loader = torch.utils.data.DataLoader(torch.utils.data.TensorDataset(x_train, y_train), batch_size=batch_size, shuffle=True)
+    valid_loader = torch.utils.data.DataLoader(torch.utils.data.TensorDataset(x_valid, y_valid), batch_size=batch_size, shuffle=False)
 
-                    #amsgrad=False
-                    )
-    #scheduler = torch.optim.lr_scheduler.ExponentialLR(optimizer=optimizer, gamma=0.6)
-
-    train_loader = torch.utils.data.DataLoader(torch.utils.data.TensorDataset(x_train, y_train), batch_size=BATCH_SIZE, shuffle=True)
-    valid_loader = torch.utils.data.DataLoader(torch.utils.data.TensorDataset(x_valid, y_valid), batch_size=BATCH_SIZE, shuffle=False)
-
-    num_batches = len(x_train)/BATCH_SIZE
-    #print_flags(FLAGS)
+    num_batches = len(x_train)/batch_size
+    print(len(x_train))
     results=[]
 
     for epoch in range(n_epochs):
-        train_roc_val=-1
         start_time = time.time()
         model.train()
         avg_loss = 0.
 
 
-        if not KAGGLE :
-            progbar =Progbar(num_batches, stateful_metrics=['train-auc'])
+        progbar =Progbar(num_batches, stateful_metrics=['train-auc'])
 
         whole_y_pred=np.array([])
         whole_y_t=np.array([])
@@ -524,15 +367,15 @@ def train_model(h_params, model, x_train, x_valid, y_train, y_valid,  lr,
 
             if h_params.use_roc_star and epoch>0 :
 
-
                if i==0 : print('*Using Loss Roc-star')
                loss = roc_star_loss(y_batch,y_pred,epoch_gamma, last_whole_y_t, last_whole_y_pred)
-
 
             else:
                if i==0 : print('*Using Loss BxE')
                loss = F.binary_cross_entropy(y_pred, 1.0*y_batch)
 
+            logger.report_scalar(title="Loss", series="trains loss",
+                                 value=loss, iteration=epoch * len(x_train) + i)
 
             optimizer.zero_grad()
             loss.backward()
@@ -544,7 +387,7 @@ def train_model(h_params, model, x_train, x_valid, y_train, y_valid,  lr,
             optimizer.step()
 
             whole_y_pred = np.append(whole_y_pred, y_pred.clone().detach().cpu().numpy())
-            whole_y_t      = np.append(whole_y_t, y_batch.clone().detach().cpu().numpy())
+            whole_y_t    = np.append(whole_y_t, y_batch.clone().detach().cpu().numpy())
 
             if i>0:
                 if i%50==1 :
@@ -554,16 +397,14 @@ def train_model(h_params, model, x_train, x_valid, y_train, y_valid,  lr,
 
                       train_roc_val=-1
 
-                   if not KAGGLE :
-                         progbar.update(
-                            i,
-                            values=[
-                                ("loss", np.mean(loss.detach().cpu().numpy())),
-                                ("train-auc", train_roc_val)
-                            ]
-                         )
+                   progbar.update(
+                      i,
+                      values=[
+                          ("loss", np.mean(loss.detach().cpu().numpy())),
+                          ("train-auc", train_roc_val)
+                      ]
+                   )
 
-        #scheduler.step()
         model.eval()
         last_whole_y_t = torch.tensor(whole_y_t).cuda()
         last_whole_y_pred = torch.tensor(whole_y_pred).cuda()
@@ -592,7 +433,6 @@ def train_model(h_params, model, x_train, x_valid, y_train, y_valid,  lr,
         except:
            train_roc_val=-1
 
-
         elapsed_time = time.time() - start_time
         if epoch==0 :
            print("\n\n* * * * * * * * * * * Params :", title," :: ", graph)
@@ -608,146 +448,66 @@ def train_model(h_params, model, x_train, x_valid, y_train, y_valid,  lr,
             print('* * grabbing ', best_result)
 
 
-        #print("Validation MET = ", met)
         print("\r Training AUC = ", train_roc_val)
         if valid_auc>0 and train_roc_val>0 :
-            if TRAINS :
-                logger.report_scalar(title=title, series=graph,
-                     value=valid_auc, iteration=epoch)
-                logger.report_scalar(title=title, series=graph+"_train",
-                     value=train_roc_val, iteration=epoch)
+            logger.report_scalar(title=title, series=graph,
+                 value=valid_auc, iteration=epoch)
+            logger.report_scalar(title=title, series=graph+"_train",
+                 value=train_roc_val, iteration=epoch)
 
-        #logger.report_scalar(title=title, series=graph,
-        #     value=train_roc_val, iteration=epoch)
-        #logger.report_scalar(title=title, series=graph,
-        #     value=valid_auc, iteration=epoch)
         results.append({
            'valid_auc': valid_auc,
            'train_auc': train_roc_val,
            'gamma': epoch_gamma.item()
         })
-        if TRAINS:
-          print(f'TRAINS results page: {task._get_app_server()}/projects/{task.project}/experiments/{task.id}/output/log')
+
+        print(f'TRAINS results page: {task._get_app_server()}/projects/{task.project}/experiments/{task.id}/output/log')
 
         print()
 
-
     return results
 
+
 def run(h_params,embedding_matrix, title='',graph=''):
-    loss_fn=nn.BCEWithLogitsLoss(reduction='mean')
     model = NeuralNet(embedding_matrix,h_params)
     model.cuda()
     h_params.dropout_i,h_params.dropout_o,h_params.dropout_w = (h_params.dropout,h_params.dropout,h_params.dropout)
     run_result = train_model(h_params,model, x_train_torch, x_valid_torch, y_train_torch, y_valid_torch,  lr=h_params.initial_lr,
-                BATCH_SIZE=h_params.batch_size, n_epochs=EPOCHS,title=title,graph=graph)
+                batch_size=h_params.batch_size, n_epochs=h_params.epochs,title=title,graph=graph)
     return run_result
 
 
-
-def dflags(FLAGS):
-    print('=====  PARAMS  ==========')
-    dv = FLAGS.__dict__
-    for k in dv:
-        print(f"{'                                ** ' if k in explore_dimensions else ''}{k} : {dv[k]}\r",flush=True)
-    print('=====  /PARAMS  =========', flush=True)
-
-#def flags_in_flux(explore_dimensions,FLAGS):
-
-def describe_dims(FLAGS, explore_dimension=o_explore_dimensions):
-    return " | ".join([o + ':' + str(FLAGS.__getattribute__(o)) for o in explore_dimension])
-
-SKIP_BXE=True
-SKIP_ROC=False
-
-def descend_dimensions(explore_dimensions,FLAGS,results):
-    print("explore_dimensions :", explore_dimensions)
-    explore_dimensions = copy(explore_dimensions)
-
-    if len(explore_dimensions)>0 :
-       next_key = list(explore_dimensions.keys())[0]
-       next_val_list = explore_dimensions[next_key]
-       del explore_dimensions[next_key]
-
-
-       for v in next_val_list :
-          FLAGS.__setattr__(next_key,v)
-          #code.interact(local=dict(globals(), **locals()))
-          descend_dimensions(explore_dimensions, FLAGS,results)
-
-    else:
-
-       #code.interact(local=dict(globals(), **locals()))
-
-       title = describe_dims(FLAGS)
-       FLAGS.__setattr__('use_roc_star', True)
-       if not SKIP_ROC :
-           results_ROC= run(FLAGS, embedding_matrix,title,'ROC_STAR')
-       if not SKIP_BXE :
-           FLAGS.__setattr__('use_roc_star', False)
-           #title = describe_dims(FLAGS)
-           results_BXE= run(FLAGS, embedding_matrix, title, 'BxE')
-       else:
-           results_BXE = ( (0,) * len(results_ROC))
-
-def automate(FLAGS,embedding_matrix,explore_dimensions):
-
-    #explore_dimensions.pop('use_roc_star')
-    #FLAGS.__setattr__('use_roc_star', True)
-    results=[]
-    descend_dimensions(explore_dimensions, FLAGS,results)
-    #FLAGS.__setattr__('use_roc_star', False)
-    #results_BXE=[]
-    #descend_dimensions(explore_dimensions, FLAGS,results_BXE)
-
-if True:  #__name__ == '__main__':
+if __name__ == '__main__':
     parser = argparse.ArgumentParser()
 
-    parser.add_argument('--use-roc-star', action='store_true')
+    parser.add_argument('--use-roc-star', type=bool, default=True)
     parser.add_argument('--delta', type=float, default=2)
     parser.add_argument('--initial-lr', type=float, default=1e-3)
     parser.add_argument('--dense-hidden-units', type=int, default=1024)
     parser.add_argument('--lstm-units', type=int, default=128)
-    parser.add_argument('--batch-size', type=int,default=128)
-    parser.add_argument('--bidirectional', action='store_true')
+    parser.add_argument('--batch-size', type=int,default=512)
+    parser.add_argument('--bidirectional', type=bool, default=True)
     parser.add_argument('--spacial-dropout', type=float, default=0.00)
     parser.add_argument('--dropout-w', type=float,default=0.20)
     parser.add_argument('--dropout-i', type=float,default=0.20)
     parser.add_argument('--dropout-o', type=float,default=0.20)
     parser.add_argument('--dropout', type=float,default=0.20)
+    parser.add_argument('--epochs', type=int, default=30)
+    parser.add_argument('--trunc', type=int, default = 70000,help='truncates data, -1 for no truncation')
+    parser.add_argument('--maxlen', type=int, default=30)
+    parser.add_argument('--seed', type=int,default=43)
 
-    parser.add_argument('--auto',  action='store_true')
-    #FLAGS, unparsed = parser.parse_known_args()
-    #--batch-size=128  --initial-lr=1e-3 --weight-decay=1e-6 --dropout-i=0.07 --dropout-o=0.10 --dropout-w=0.07 --dense-hidden-units=1024 --spacial-dropout=0.00
+    FLAGS, unparsed = parser.parse_known_args()
 
-    if not KAGGLE :
-       FLAGS, unparsed = parser.parse_known_args()
-    else:
-       FLAGS, unparsed = parser.parse_known_args(args=hard_opts)
-       print("KAGGLE opts ...", FLAGS)
+    #TODO is it ok that it's here?
+    torch.manual_seed(FLAGS.seed)
+    torch.backends.cudnn.deterministic = True
 
-    #code.interact(local=dict(globals(), **locals()))
-    init()
-    print('automatic ...',FLAGS.auto)
-    print('kaggle ', KAGGLE)
+    init(FLAGS)
 
-    if False : #WARNING-fix not FLAGS.auto :
-      run(FLAGS, embedding_matrix)
-    else:
-      print('automating ....')
-      automate(FLAGS, embedding_matrix,explore_dimensions)
+    title = "ROC_STAR" if FLAGS.use_roc_star else "BXE"
+    run(FLAGS, embedding_matrix, title=title, graph=title)
 
-if TRAINS :
-  print(f'TRAINS results page: {task._get_app_server()}/projects/{task.project}/experiments/{task.id}/output/log')
-
-print('\r\r\r * * Best validation score ',best_result)
-
-# Input data files are available in the read-only "../input/" directory
-# For example, running this (by clicking run or pressing Shift+Enter) will list all files under the input directory
-
-import os
-for dirname, _, filenames in os.walk('/kaggle/input'):
-    for filename in filenames:
-        print(os.path.join(dirname, filename))
-
+    print(f'TRAINS results page: {task._get_app_server()}/projects/{task.project}/experiments/{task.id}/output/log')
+    print('\r\r\r * * Best validation score ',best_result)
 
