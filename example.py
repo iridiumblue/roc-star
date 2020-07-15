@@ -30,6 +30,9 @@ from trains import Task
 from trains import StorageManager
 from pkbar import Kbar as Progbar
 import argparse
+import os
+from tempfile import gettempdir
+
 
 # ignore all future warnings
 simplefilter(action='ignore', category=FutureWarning)
@@ -75,7 +78,8 @@ def init(h_params):
     y_valid_torch = torch.tensor(y_valid, dtype=torch.float32).cuda()
     del x_train, y_train, x_valid, y_valid; gc.collect(2)
 
-    task = Task.init(project_name='local ROC flyover', task_name='Opener')
+    task_name = "ROC" if h_params.use_roc_star else "BxE"
+    task = Task.init(project_name='Roc-star Loss', task_name='Roc star')
     logger = task.get_logger()
 
 
@@ -445,14 +449,15 @@ def train_model(h_params, model, x_train, x_valid, y_train, y_valid,  lr,
             best_result['auc']= valid_auc
             best_result['params'] = copy(h_params)
             best_result['epoch'] = epoch+1
+            torch.save(model.state_dict(), os.path.join(gettempdir(), "roc-star.pt"))
             print('* * grabbing ', best_result)
 
 
         print("\r Training AUC = ", train_roc_val)
         if valid_auc>0 and train_roc_val>0 :
-            logger.report_scalar(title=title, series=graph,
+            logger.report_scalar(title="Accuracy", series="validation accuracy",
                  value=valid_auc, iteration=epoch)
-            logger.report_scalar(title=title, series=graph+"_train",
+            logger.report_scalar(title="Accuracy", series="train accuracy",
                  value=train_roc_val, iteration=epoch)
 
         results.append({
@@ -484,22 +489,21 @@ if __name__ == '__main__':
     parser.add_argument('--delta', type=float, default=2)
     parser.add_argument('--initial-lr', type=float, default=1e-3)
     parser.add_argument('--dense-hidden-units', type=int, default=1024)
-    parser.add_argument('--lstm-units', type=int, default=128)
-    parser.add_argument('--batch-size', type=int,default=512)
+    parser.add_argument('--lstm-units', type=int, default=64)
+    parser.add_argument('--batch-size', type=int,default=128)
     parser.add_argument('--bidirectional', type=bool, default=True)
     parser.add_argument('--spacial-dropout', type=float, default=0.00)
-    parser.add_argument('--dropout-w', type=float,default=0.20)
-    parser.add_argument('--dropout-i', type=float,default=0.20)
-    parser.add_argument('--dropout-o', type=float,default=0.20)
+    parser.add_argument('--dropout-w', type=float,default=0.18)
+    parser.add_argument('--dropout-i', type=float,default=0.18)
+    parser.add_argument('--dropout-o', type=float,default=0.18)
     parser.add_argument('--dropout', type=float,default=0.20)
     parser.add_argument('--epochs', type=int, default=30)
-    parser.add_argument('--trunc', type=int, default = 70000,help='truncates data, -1 for no truncation')
+    parser.add_argument('--trunc', type=int, default = 200000,help='truncates data, -1 for no truncation')
     parser.add_argument('--maxlen', type=int, default=30)
     parser.add_argument('--seed', type=int,default=43)
 
     FLAGS, unparsed = parser.parse_known_args()
 
-    #TODO is it ok that it's here?
     torch.manual_seed(FLAGS.seed)
     torch.backends.cudnn.deterministic = True
 
