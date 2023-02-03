@@ -86,7 +86,7 @@ To make a loss function from this, we could just flip the x < y comparison to x 
 
 <img style="max-height:250px; max-width:800px; "  src='https://raw.githubusercontent.com/iridiumblue/about/master/xpr.png' />
 
-Yann got this forumula by applying a series of changes to the WMW:
+Yann got this formula by applying a series of changes to the WMW:
 
  1. x<y has been flipped to y<x, to make it a loss (higher is worse.)   So the loss is focussed on wrong-ordered pairs.
  2. Instead of treating all pairs equally, weight is given to the how far apart the pair is.
